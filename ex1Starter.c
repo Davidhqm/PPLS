@@ -51,48 +51,12 @@ void sequentialprefixsum (int *data, int n) {
 }
 
 typedef struct {
-  pthread_mutex_t lock;
-  pthread_cond_t cv;
-  int nthreads;
-  int arrived;
-  int phase;
-} simple_barrier;
-
-static void barrier_init(simple_barrier *b, int nthreads) {
-  pthread_mutex_init(&b->lock, NULL);
-  pthread_cond_init(&b->cv, NULL);
-  b->nthreads = nthreads;
-  b->arrived = 0;
-  b->phase = 0;
-}
-
-static void barrier_wait(simple_barrier *b) {
-  int my_phase;
-  pthread_mutex_lock(&b->lock);
-  my_phase = b->phase;
-  b->arrived++;
-  if (b->arrived == b->nthreads) {
-    b->arrived = 0;
-    b->phase++;
-    pthread_cond_broadcast(&b->cv);
-  } else {
-    while (my_phase == b->phase) pthread_cond_wait(&b->cv, &b->lock);
-  }
-  pthread_mutex_unlock(&b->lock);
-}
-
-static void barrier_destroy(simple_barrier *b) {
-  pthread_mutex_destroy(&b->lock);
-  pthread_cond_destroy(&b->cv);
-}
-
-typedef struct {
   int tid;
   int n;
   int p;
   int base;
   int *data;
-  simple_barrier *barrier;
+  pthread_barrier_t *barrier;
 } worker_args;
 
 static int chunk_end_index(int tid, int p, int n, int base) {
@@ -107,7 +71,7 @@ static void *prefix_worker(void *arg) {
   int i, t;
 
   for (i = start + 1; i <= end; i++) a->data[i] += a->data[i - 1];
-  barrier_wait(a->barrier);
+  pthread_barrier_wait(a->barrier);
 
   if (a->tid == 0) {
     int prev_end = chunk_end_index(0, a->p, a->n, a->base);
@@ -117,13 +81,13 @@ static void *prefix_worker(void *arg) {
       prev_end = top;
     }
   }
-  barrier_wait(a->barrier);
+  pthread_barrier_wait(a->barrier);
 
   if (a->tid > 0) {
     int offset = a->data[chunk_end_index(a->tid - 1, a->p, a->n, a->base)];
     for (i = start; i < end; i++) a->data[i] += offset;
   }
-  barrier_wait(a->barrier);
+  pthread_barrier_wait(a->barrier);
   return NULL;
 }
 
@@ -132,7 +96,7 @@ static void *prefix_worker(void *arg) {
 void parallelprefixsum (int *data, int n) {
   pthread_t threads[NTHREADS];
   worker_args args[NTHREADS];
-  simple_barrier barrier;
+  pthread_barrier_t barrier;
   int t, base;
 
   /*
@@ -159,7 +123,7 @@ void parallelprefixsum (int *data, int n) {
   }
 
   base = n / NTHREADS;
-  barrier_init(&barrier, NTHREADS);
+  pthread_barrier_init(&barrier, NULL, NTHREADS);
 
   for (t = 0; t < NTHREADS; t++) {
     args[t].tid = t;
@@ -172,7 +136,7 @@ void parallelprefixsum (int *data, int n) {
   }
   for (t = 0; t < NTHREADS; t++) pthread_join(threads[t], NULL);
 
-  barrier_destroy(&barrier);
+  pthread_barrier_destroy(&barrier);
 }
 
 

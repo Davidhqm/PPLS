@@ -50,29 +50,32 @@ void sequentialprefixsum (int *data, int n) {
   }
 }
 
+// Worker thread arguments structure to bundle the parameters we need to pass to the worker threads.
 typedef struct {
   int tid;
-  int n;
-  int p;
+  int n; // total number of items in the array
+  int p; // number of threads
   int base;
   int *data;
   pthread_barrier_t *barrier;
 } worker_args;
 
 static int chunk_end_index(int tid, int p, int n, int base) {
-  if (tid == p - 1) return n - 1;
-  return ((tid + 1) * base) - 1;
+  if (tid == p - 1) return n - 1; //  index for final chunck  
+  return ((tid + 1) * base) - 1; // normal chunk end index for tid < p-1
 }
 
 static void *prefix_worker(void *arg) {
   worker_args *a = (worker_args *)arg;
   int start = a->tid * a->base;
   int end = chunk_end_index(a->tid, a->p, a->n, a->base);
-  int i, t;
+  int i, t; 
 
+  // Phase 1: in-place prefix sum within the chunk
   for (i = start + 1; i <= end; i++) a->data[i] += a->data[i - 1];
   pthread_barrier_wait(a->barrier);
 
+  // Phase 2: only thread 0 updates the chunk-top elements with a prefix sum over those tops
   if (a->tid == 0) {
     int prev_end = chunk_end_index(0, a->p, a->n, a->base);
     for (t = 1; t < a->p; t++) {
@@ -83,6 +86,7 @@ static void *prefix_worker(void *arg) {
   }
   pthread_barrier_wait(a->barrier);
 
+  // Phase 3: threads 1..p-1 add the previous chunk's final value to all elements in their chunk except final element
   if (a->tid > 0) {
     int offset = a->data[chunk_end_index(a->tid - 1, a->p, a->n, a->base)];
     for (i = start; i < end; i++) a->data[i] += offset;
@@ -100,7 +104,6 @@ void parallelprefixsum (int *data, int n) {
   int t, base;
 
   /*
-    Implementation strategy (compact 3-phase design):
     1) Create NTHREADS worker threads once, each owning one contiguous chunk.
        Chunk size is floor(n/NTHREADS) for all but the final chunk, which absorbs
        any remainder items so all n elements are covered.
@@ -109,11 +112,10 @@ void parallelprefixsum (int *data, int n) {
     3) Phase 2: after a barrier, only worker 0 updates the chunk-top elements
        (the last index of each chunk) with a sequential prefix over those tops.
        Other workers wait at the same barrier points.
-    4) Phase 3: after another barrier, workers 1..NTHREADS-1 add the previous
-       chunk's final value to all elements in their chunk except their own final
-       element (already correct after phase 2).
+    4) Phase 3: after another barrier, workers 1 to NTHREADS-1 add the previous
+       chunk's final value to all elements in their chunk but their own final
+       element.
     Barriers are used only between phases to enforce required data dependencies.
-    The algorithm is fully in-place and allocates no auxiliary data arrays.
   */
 
   if (n <= 1) return;
